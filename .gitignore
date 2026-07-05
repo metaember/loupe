@@ -1,0 +1,22 @@
+# Generated design/print artifacts
+*.png
+*.html
+*.gcode.3mf
+result.json
+
+# Mesh/CAD outputs (keep source scripts, not exports)
+*.stl
+*.step
+*.stp
+*.3mf
+*.obj
+*.glb
+
+# uv / Python
+.venv/
+__pycache__/
+*.pyc
+.python-version
+
+# macOS
+.DS_Store
