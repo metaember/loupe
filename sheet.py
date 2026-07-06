@@ -127,6 +127,34 @@ def camera_words(az_deg: float, el_deg: float) -> str:
     return "from " + "-".join(words) if words else ""
 
 
+def clip_tris_halfspace(tris: np.ndarray, axis: int, val: float, keep_less: bool) -> np.ndarray:
+    """Clip triangles to a half-space, re-triangulating straddlers so the cut edge
+    lands exactly on the plane. Without this, whole-triangle culling leaves coarse
+    facets jutting past the cut as shards. keep_less=True keeps coord<=val (cutaway
+    op '>'); keep_less=False keeps coord>=val (op '<')."""
+    c = tris[:, :, axis]
+    s = (val - c) if keep_less else (c - val)     # signed keep-distance; >=0 is kept
+    inside = s >= 0
+    cnt = inside.sum(axis=1)
+    kept = tris[cnt == 3]                          # fully inside -> unchanged
+    new: list = []
+    straddle = (cnt == 1) | (cnt == 2)
+    for tri, sd, ins in zip(tris[straddle], s[straddle], inside[straddle]):
+        poly: list = []                           # keep-side polygon (Sutherland-Hodgman)
+        for i in range(3):
+            j = (i + 1) % 3
+            if ins[i]:
+                poly.append(tri[i])
+            if ins[i] != ins[j]:                  # edge crosses the plane -> split vertex on it
+                t = sd[i] / (sd[i] - sd[j])
+                poly.append(tri[i] + t * (tri[j] - tri[i]))
+        for k in range(1, len(poly) - 1):         # fan-triangulate the 3- or 4-gon
+            new.append([poly[0], poly[k], poly[k + 1]])
+    if new:
+        return np.concatenate([kept, np.asarray(new, dtype=tris.dtype)], axis=0)
+    return kept
+
+
 def render_view(parts: list[Part], az: float, el: float, w: int, h: int,
                 scale: float, center: np.ndarray,
                 cut: tuple[int, str, float] | None = None,
@@ -147,8 +175,7 @@ def render_view(parts: list[Part], az: float, el: float, w: int, h: int,
                 continue
         if cut is not None:
             axis, op, val = cut
-            cen = tris.mean(axis=1)[:, axis]
-            tris = tris[cen < val] if op == ">" else tris[cen > val]
+            tris = clip_tris_halfspace(tris, axis, val, keep_less=(op == ">"))
             if len(tris) == 0:
                 continue
         v = (tris - center) @ M.T  # (n,3,3) -> screen coords
@@ -269,16 +296,23 @@ def render_slice(parts: list[Part], axis: int, val: float, w: int, h: int,
         dr.line([px(umin, v), px(umax, v)], fill=GRID_COL)
 
     shapes = []
+    draw_ops = []
     for part in parts:
         polys = section_polys(part, axis, val)
-        merged = unary_union(polys) if polys else None
-        shapes.append(merged)
-        for poly in polys:
-            ext = [px(u, v) for u, v in poly.exterior.coords]
-            dr.polygon(ext, fill=part.color, outline=tuple(int(c * 0.55) for c in part.color))
-            for hole in poly.interiors:
-                dr.polygon([px(u, v) for u, v in hole.coords], fill=SLICE_BG,
-                           outline=tuple(int(c * 0.55) for c in part.color))
+        shapes.append(unary_union(polys) if polys else None)
+        draw_ops += [(part, poly) for poly in polys]
+    # paint largest-first (by bbox extent) so a part nested in another's hole lands
+    # on top: holes are filled with the background, so a later part would otherwise
+    # be erased by an enclosing part's hole. Keeps sections order-independent.
+    def _extent(poly):
+        x0, y0, x1, y1 = poly.bounds
+        return (x1 - x0) * (y1 - y0)
+    for part, poly in sorted(draw_ops, key=lambda t: _extent(t[1]), reverse=True):
+        ext = [px(u, v) for u, v in poly.exterior.coords]
+        dr.polygon(ext, fill=part.color, outline=tuple(int(c * 0.55) for c in part.color))
+        for hole in poly.interiors:
+            dr.polygon([px(u, v) for u, v in hole.coords], fill=SLICE_BG,
+                       outline=tuple(int(c * 0.55) for c in part.color))
 
     # interference: pairwise overlap between different parts' sections
     hit = 0.0
