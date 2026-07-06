@@ -2,6 +2,8 @@
 
 **A code-CAD review pipeline for 3D printing: render it, prove it, preview it, slice it.**
 
+![Cross-section slices of a threaded jar and screw lid: a vertical cut plus two horizontal cuts, each part in its own color on a world-mm grid. The male and female threads interlock and the black clearance gap between their flanks is clearly visible.](docs/img/hero-slices.png)
+
 Four single-file [`uv`](https://docs.astral.sh/uv/) scripts — zero setup, inline dependencies — that turn a parametric CAD model into something you (or an LLM agent) can actually *trust* before committing filament to it:
 
 ```
@@ -28,6 +30,10 @@ This pipeline was built during a real reverse-engineering job — modeling a par
 
 It's written to be driven by a human at a terminal **or** by an AI coding agent — the contact sheet exists precisely because an agent can `Read` a PNG, and the deterministic checks exist because "looks right" is not a specification.
 
+![Two cross-section slices through a threaded jar whose lid has been shoved off-axis so the threads collide; the overlap is painted solid red and each tile's caption reads a measured interference area in mm².](docs/img/interference.png)
+
+*A staged collision: the screw lid shoved off-axis so its thread crashes the neck. `sheet.py` paints the overlap red and prints the measured area into the caption; `check.py` turns the same fact into a nonzero exit code. This is the thing a pretty render can never tell you.*
+
 ---
 
 ## Requirements
@@ -40,6 +46,7 @@ It's written to be driven by a human at a terminal **or** by an AI coding agent 
 git clone https://github.com/<you>/loupe.git
 cd loupe
 uv run check.py your_part.stl        # first run resolves deps; subsequent runs are instant
+uv run examples/threaded_jar.py      # regenerate the threaded-jar model used in the shots above
 ```
 
 ---
@@ -65,6 +72,8 @@ uv run check.py part.stl --min-wall 1.2 --overhang 45 --json      # thin-wall + 
 
 Renders one or more meshes into a single PNG: 8 named orthographic/iso views + custom camera angles, 2D cross-section slices with **automatic part-vs-part interference detection** (overlap painted red, mm² in the caption), 3D cutaways, and region zoom. Every tile is captioned with its camera position and screen axes — trust the captions, not your assumptions.
 
+![The default contact sheet of a cutlery-drawer insert: two isometric views plus front, back, left, right, top and bottom. The per-utensil channels read from the top, the ramped floor from the side, and the comb of channel walls head-on — each tile captioned with camera position and screen axes.](docs/img/contact-sheet.png)
+
 ```sh
 uv run sheet.py body.stl lid.stl -o sheet.png
 uv run sheet.py a.stl b.stl --slice z=50% --slice z=12,15 --slice x=50%
@@ -76,10 +85,15 @@ uv run sheet.py a.stl --views none --slice z=10,20,30                    # slice
 - `--view AZ,EL` sets a custom camera. Use the `=` form for **negative** azimuths (`--view=-25,12`) — argparse eats a bare leading dash otherwise.
 - `--roi "z=45:62[,x=..]"` zooms *every* tile onto a region, keeping any triangle that overlaps it.
 - Surfaces that touch by design flag a few mm² of contact sliver; judge by the reported area — real collisions are 10–100× bigger.
+- `--cutaway "z>50%"` (repeatable) removes everything past a plane and re-triangulates the cut faces exactly on it — the internal stack reads clean, no jagged straddling facets.
+
+![A device enclosure shown in isometric and front views plus two 3D cutaways — one cutting in Z, one in Y — each cleanly sectioning the shell to reveal the PCB seated inside.](docs/img/cutaway.png)
 
 ### `viewer.py` — self-contained browser viewer (the human's eyes)
 
 One HTML file (GLB embedded as base64, three.js from CDN): orbit controls, an adaptive mm grid with tick numbers in **world mm on all three axes**, per-part legend, explode toggle, auto-rotate (remembered in localStorage), and **double-ended clip sliders per axis** (keep the slab between two handles).
+
+![The self-contained browser viewer showing a VFD-clock enclosure on a world-mm grid with colored X/Y/Z axes, a per-part legend, and explode and per-axis clip-plane controls.](docs/img/viewer.png)
 
 ```sh
 uv run viewer.py body.stl lid.stl -o preview.html --title "My part"
@@ -116,6 +130,19 @@ uv run slice.py part_a.stl part_b.stl                              # time + cost
 ```
 
 Model multi-part designs in **assembled coordinates** and export both the individual parts and an `asm_*` set — `check.py` and `sheet.py` do interference detection across whatever files you hand them.
+
+---
+
+## For agents
+
+This pipeline is built to be driven by an AI coding agent as much as a human. Two surfaces:
+
+- **[AGENTS.md](AGENTS.md)** — terse operational guide any agent harness (Claude Code, Cursor, Aider, …) can read: the review loop, the exact commands, and the gotchas that waste tokens.
+- **`loupe_mcp.py`** — an MCP server exposing `check`, `sheet`, and `slice`. Crucially, **`sheet` returns the contact sheet inline as an image**, so an agent sees the render in the same turn instead of writing a file and reading it back. Wire it up once:
+
+  ```sh
+  claude mcp add loupe -- uv run /ABS/PATH/TO/loupe/loupe_mcp.py
+  ```
 
 ---
 

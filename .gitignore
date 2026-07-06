@@ -4,6 +4,10 @@
 *.gcode.3mf
 result.json
 
+# ...but keep the checked-in README images
+!docs/img/
+!docs/img/*.png
+
 # Mesh/CAD outputs (keep source scripts, not exports)
 *.stl
 *.step
