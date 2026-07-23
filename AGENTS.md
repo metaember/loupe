@@ -46,6 +46,48 @@ not a spec — gate on the exit code, use the image to understand *why* it faile
 - **Loading STLs elsewhere?** trimesh needs `process=True` or CAD-exported STLs aren't `is_volume`
   (booleans refuse triangle soup); `polygons_full` drops holes unless **rtree** is installed.
 
+## The PCB loop
+
+```
+1. edit the board script (imports pcb.py: parts, nets, route polylines, zones)
+2. BUILD:  uv run my_board.py            -> .kicad_pcb via KiCad's bundled Python
+3. GATE:   uv run pcbcheck.py out/my_board.kicad_pcb
+           -> nonzero = DRC error / unrouted net / netless pad. Fix before rendering.
+4. LOOK:   uv run pcbsheet.py out/my_board.kicad_pcb   then Read the PNG
+5. FAB:    uv run pcbfab.py out/my_board.kicad_pcb --mesh
+           -> gerbers.zip + JLC BOM/CPL + STEP + STL (the STL joins the 3D loop above)
+```
+
+- **`pcbcheck.py` is your specification, `pcbsheet.py` is your eyes** — same doctrine as 3D.
+  The sheet catches what DRC can't: a corner arc sweeping the wrong way, a part on the
+  wrong side, silk crowding a connector. Actually read it.
+- Coordinates: **origin lower-left, +Y up, mm** — build123d's frame, not KiCad's y-down.
+  Rotations CCW. The driver handles the flip; never pre-flip anything yourself.
+- Route points are pads `("R1", 2)` or absolute `(x, y)`; pad refs resolve to true pad
+  centers from the loaded footprint, so route pad-to-pad and only add elbows as bare tuples.
+- Every pad must be in a `net()` or declared `nc()` — netless pads fail the gate (they'd
+  silently skip connectivity checking otherwise).
+- Footprint names are `LibName:FootprintName` from KiCad's bundled libs
+  (`ls "$(uv run pcb.py --info | grep footprints | cut -d: -f2- | xargs)"` to browse; e.g.
+  `LED_SMD:LED_0603_1608Metric`). A missing footprint is a build error, not a warning.
+- Pad-1 conventions matter: chip R/C/LED pad 1 is the LEFT pad at rot=0; LED pad 1 = cathode.
+- Silk sits ~0.15mm proud in DRC's eyes — keep text ≥1mm from the outline or eat warnings.
+
+### pcbnew driver gotchas (already handled inside pcb.py — don't re-fight these)
+
+- ZONE_FILLER on a `CreateEmptyBoard()` board **segfaults** (KiCad 10.0.4): the driver
+  saves, reloads (attaches a project), then fills. Also: never drop the last Python ref
+  to a BOARD mid-build — its SWIG destructor runs immediately and corrupts the heap.
+- `board.GetLayerID("F.SilkS")` returns −1 in KiCad 10 (wants `F.Silkscreen`) and pcbnew
+  will happily write `(layer "UNDEFINED")` → an **unparseable board file**. The driver
+  aliases legacy names and hard-fails unknown ones.
+- An NPTH pad with an empty `(layers)` list is also a parse error on reload — the driver
+  uses `PAD.UnplatedHoleMask()`.
+- Corner arcs are built from **three points** (`SetArcGeometry`) — every angle-sign
+  convention was tried and every one was wrong in some view.
+- No `wx.App` in the driver — `wx.DisableAsserts()` alone is enough, and an App bounces
+  a dock icon (and crash dialogs at the user) on every build.
+
 ## MCP
 
 `loupe_mcp.py` exposes `check`, `sheet`, and `slice` over MCP — and **`sheet` returns the contact sheet

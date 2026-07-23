@@ -4,6 +4,9 @@
 *.gcode.3mf
 result.json
 
+# PCB build outputs (regenerate from the board script)
+examples/out/
+
 # ...but keep the checked-in README images
 !docs/img/
 !docs/img/*.png
