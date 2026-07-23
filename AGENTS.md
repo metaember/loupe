@@ -1,10 +1,32 @@
 # AGENTS.md — driving loupe as an agent
 
 loupe is a code-CAD **review** pipeline. You edit a parametric model (build123d / CadQuery),
-then use these four `uv run` scripts to *prove* it before it prints. You have two things a
+then use these `uv run` scripts to *prove* it before it prints. You have two things a
 render alone can't give you: **machine-checkable geometry facts** and **an image you can read**.
 
-## The loop
+## The planning loop (before you write any CAD)
+
+```
+1. write a draft: a YAML dimension record — named dims with tolerance and provenance,
+   plus simple 2D profiles that reference them
+2. GATE:  uv run draftcheck.py part.draft.yaml
+          -> nonzero = unresolvable expression, feature outside the outline, wall under
+             min_wall, a false check, a fit outside its class. Fix it before modeling.
+3. LOOK:  uv run draftsheet.py part.draft.yaml -o draft.png   then Read draft.png
+4. the CAD script reads the draft (`from draft import load`) or a params export
+   (`uv run draft.py part.draft.yaml --params dims.json`) — never retype the numbers
+5. after export, close the loop:
+   uv run draftcheck.py part.draft.yaml --stl asm_part.stl
+```
+
+Why this exists: `check.py` proves the model you built, but it cannot tell you that you built
+the *wrong* model. A wall that's 1.8 mm when you meant 2.4 mm is watertight, collision-free,
+and wrong. The draft is the record that makes that a failing assertion instead of a surprise.
+
+**The draft is the single source of truth.** If a number appears in both the draft and the CAD
+script, you have already lost — import it.
+
+## The 3D loop
 
 ```
 1. edit the CAD script, export STLs (individual parts + an assembled `asm_*` set)
@@ -20,6 +42,16 @@ not a spec — gate on the exit code, use the image to understand *why* it faile
 
 ## The tools
 
+- **`draft.py <spec.yaml> [--info] [--params dims.json|dims.py]`**
+  Loads and resolves a draft. `--params` writes the resolved dim table for the CAD script to
+  import; `--info` prints it with tolerances and provenance.
+- **`draftcheck.py <spec.yaml> [--stl FILE...] [--json]`**
+  The planning gate: expression resolution, containment, 2D min-wall, `checks:`, fit classes,
+  and — with `--stl` — bbox and hole diameter/position against the exported mesh.
+  **Exits nonzero on a failed assertion.**
+- **`draftsheet.py <spec.yaml> [-o out.png] [--views a,b] [--dxf out.dxf]`**
+  Dimensioned drawing (extension lines, arrowheads, ⌀/R callouts, ± tolerances) plus a table
+  of every dim with its value, tolerance and provenance. **Read the PNG.**
 - **`check.py <stls> [--interference-max MM3] [--min-wall MM] [--overhang DEG] [--clearance "a:b:gap@z=lo:hi"]`**
   Watertightness always; interference (exact boolean volume), thin-wall, unsupported-overhang,
   region-scoped clearance on request. **Exits nonzero on a failed assertion** — wire it into your gate.
@@ -30,6 +62,22 @@ not a spec — gate on the exit code, use the image to understand *why* it faile
   don't render it expecting to read it yourself.
 - **`slice.py <stls> [--process ...] [--filament ...]`** — headless Bambu Studio: time, grams, cost.
   Needs a local Bambu Studio install (macOS paths by default).
+
+## Draft gotchas
+
+- **Model in the draft's frame.** The as-built gate compares hole coordinates literally, so a
+  part whose corner is at the origin in the draft must be built that way too (`align=Align.MIN`,
+  not build123d's centred default). Same rule the PCB half already states.
+- **A dim is a literal, an expression string, or a mapping**: `body_h: 34`, `neck_r: "bore_d/2 + wall"`,
+  or `{v: 2.4, tol: 0.1, from: "calipers, n=5"}`. Use `{expr: ..., tol: ...}` to put a tolerance on
+  a derived dim. `from:` is where the number came from — fill it in; it's the whole point.
+- **Features are voids.** `min_wall` measures the material *between* them and to the outline edge,
+  which is what the printer has to build. Two features 0.4 mm apart is a failing wall, not a gap.
+- **Comparisons are epsilon-tolerant** (1e-9 relative). `floor >= 3*0.4` is true for a 1.2 mm floor
+  even though `3*0.4` is 1.2000000000000002. Don't write defensive slop into your checks.
+- **Only circular features are checked as-built.** Slots and polys are drawn and wall-checked but
+  not measured back out of the mesh; `holes:` cuts one section, so features must lie in that plane.
+- **`--stl` matches on file stem**: an `asbuilt:` key of `asm_case` needs `asm_case.stl`.
 
 ## Gotchas that will waste your tokens
 
@@ -90,8 +138,9 @@ not a spec — gate on the exit code, use the image to understand *why* it faile
 
 ## MCP
 
-`loupe_mcp.py` exposes `check`, `sheet`, and `slice` over MCP — and **`sheet` returns the contact sheet
-inline as an image**, so you see the render in the same call instead of writing a file and reading it back.
+`loupe_mcp.py` exposes `draft_check`, `draft_sheet`, `check`, `sheet`, and `slice` over MCP — and
+**`sheet` and `draft_sheet` return their image inline**, so you see the render in the same call
+instead of writing a file and reading it back.
 Wire it up once:
 
 ```sh

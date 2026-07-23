@@ -6,9 +6,11 @@
 # Copyright 2026 Charles Bine
 """loupe MCP server — the review pipeline, exposed to any MCP client.
 
-  check  -> deterministic geometry report (watertight / interference / walls / overhang)
-  sheet  -> labeled contact sheet, returned INLINE as a PNG you can read in the same turn
-  slice  -> headless Bambu estimate (time / filament / cost)
+  draft_check -> assert a dimension spec before any CAD exists (and, with stl, after)
+  draft_sheet -> dimensioned drawing + dimension table, returned INLINE as a PNG
+  check       -> deterministic geometry report (watertight / interference / walls / overhang)
+  sheet       -> labeled contact sheet, returned INLINE as a PNG you can read in the same turn
+  slice       -> headless Bambu estimate (time / filament / cost)
 
 Each tool shells out to the matching `uv run <tool>.py`, so the heavy per-tool deps
 (trimesh, shapely, Bambu Studio) stay isolated in their own environments and this
@@ -101,6 +103,45 @@ def sheet(
         r = _run("sheet.py", args)
         if not out.exists() or out.stat().st_size == 0:
             raise RuntimeError(f"sheet.py produced no image:\n{r.stdout}\n{r.stderr}".strip())
+        return Image(data=out.read_bytes(), format="png")
+    finally:
+        out.unlink(missing_ok=True)
+
+
+@mcp.tool()
+def draft_check(spec: str, stl: list[str] | None = None) -> str:
+    """Assert a draft spec — the planning-stage gate, before any CAD exists.
+
+    Checks that every dimension expression resolves, that features sit inside their
+    outline and hold the declared min_wall, that the `checks:` expressions hold, and
+    that declared fits land in their clearance class. Pass `stl` to also assert an
+    exported mesh still matches the draft (bbox, and drafted holes present at the
+    right diameter and position). Final line is `PASS` or `FAIL:` — gate on it.
+    """
+    args = [spec]
+    if stl:
+        args += ["--stl", *stl]
+    r = _run("draftcheck.py", args)
+    return (r.stdout + r.stderr).strip() or "(no output)"
+
+
+@mcp.tool()
+def draft_sheet(spec: str, views: str | None = None) -> Image:
+    """Render a draft's dimensioned drawing and return it INLINE as a PNG to read now.
+
+    Each view is drawn with real extension lines, arrowheads, ⌀/R callouts and ±
+    tolerances, beside a table of every dimension with its value, tolerance and
+    provenance. Dimensions are measured off the resolved geometry, so an expression
+    that evaluates wrong shows a wrong number on the drawing.
+    """
+    out = Path(tempfile.mkstemp(suffix=".png")[1])
+    try:
+        args = [spec, "-o", str(out)]
+        if views:
+            args += ["--views", views]
+        r = _run("draftsheet.py", args)
+        if not out.exists() or out.stat().st_size == 0:
+            raise RuntimeError(f"draftsheet.py produced no image:\n{r.stdout}\n{r.stderr}".strip())
         return Image(data=out.read_bytes(), format="png")
     finally:
         out.unlink(missing_ok=True)

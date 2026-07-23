@@ -7,6 +7,13 @@
 Single-file [`uv`](https://docs.astral.sh/uv/) scripts — zero setup, inline dependencies — that turn a parametric model into something you (or an LLM agent) can actually *trust* before committing filament (or a fab order) to it:
 
 ```
+draft (a YAML dimension record — written before any CAD exists)
+   → draftcheck.py assert the plan — FAILS LOUDLY on a wall under minimum, a hole off the part,
+                   a fit outside its class, an expression that won't resolve; and, given the
+                   exported STL, on a model that has drifted from what was drafted
+   → draftsheet.py a dimensioned drawing + the dim table, with every number's provenance
+   → draft.py      --params: the CAD script imports the numbers instead of retyping them
+
 CAD script (build123d / CadQuery)
    → check.py    assert geometry facts — FAILS LOUDLY if a part floats, collides, or has a thin wall
    → sheet.py    a labeled contact sheet: 8 named views + slices + interference painted red
@@ -57,6 +64,35 @@ uv run examples/threaded_jar.py      # regenerate the threaded-jar model used in
 ---
 
 ## The tools
+
+### `draft.py` / `draftcheck.py` / `draftsheet.py` — the planning stage
+
+`check.py` proves the model you built. It cannot tell you that you built the *wrong* model: a wall that's 1.8 mm when you meant 2.4 mm is watertight, collision-free, and wrong. A **draft** is the record that makes that a failing assertion — a YAML file of named dimensions, each with a tolerance and a note saying where the number came from, plus simple 2D profiles that reference them.
+
+```yaml
+dims:
+  board_w:   {v: 20,  from: "examples/blinky_coupon.py: Board(w=20)"}
+  wall:      {v: 2.0, from: "5 perimeters @ 0.4 nozzle"}
+  fit_clear: {v: 0.3, tol: 0.05, from: "slip fit, FDM rule of thumb 0.2-0.3/side"}
+  inset:  "wall + fit_clear"                       # derived — expressions over other dims
+  case_w: {expr: "board_w + 2*inset", tol: 0.2, from: "FDM process ±0.2 typical"}
+```
+
+```sh
+uv run draftcheck.py examples/coupon_case.draft.yaml            # the gate
+uv run draftsheet.py examples/coupon_case.draft.yaml -o case.png  # the eyes — then Read it
+uv run draft.py examples/coupon_case.draft.yaml --params dims.json
+uv run draftcheck.py examples/coupon_case.draft.yaml --stl asm_case.stl   # did the model drift?
+```
+
+The gate is cheap because nothing is a mesh yet: containment and wall thickness are exact 2D polygon distances. It catches a hole 0.2 mm from an edge, a feature off the part, a clearance that isn't the fit class you claimed, and an expression that won't resolve — before a single solid exists. Given the exported STL it runs the other way too, asserting the bounding box and every drafted hole's diameter and position against what was recorded.
+
+Because the CAD script imports the draft (`from draft import load`, or a `--params` export), the drawing and the model cannot disagree. Change a dimension in the YAML without rebuilding and the gate says so:
+
+```
+FAIL  asbuilt[asm_case].bbox: built 24.600×19.600×7.300, drafted 25.800×20.800×7.300, worst Δ1.200 (tol 0.25)
+FAIL  asbuilt[asm_case].hole[m2]: built ⌀2.400 at (4.800, 14.800), drafted ⌀2.400 at (5.4, 15.4) — off-centre 0.849
+```
 
 ### `check.py` — deterministic geometry verifier
 

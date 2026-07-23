@@ -1,0 +1,70 @@
+# A draft: the dimension record for a snap-in case tray carrying the blinky coupon
+# board from examples/blinky_coupon.py. Written *before* any CAD exists — every
+# number here has a source, and the CAD script imports these values rather than
+# retyping them.
+#
+#   uv run draftcheck.py examples/coupon_case.draft.yaml
+#   uv run draftsheet.py examples/coupon_case.draft.yaml -o case.png
+#   uv run draft.py examples/coupon_case.draft.yaml --params dims.json
+#
+# Frame: case outer corner at (0,0), +Y up, mm — the same frame pcb.py uses, so
+# board coordinates map into case coordinates by adding `inset`.
+name: coupon_case
+units: mm
+min_wall: 1.2
+
+dims:
+  # --- the board we have to fit (measured off the board script, not guessed)
+  board_w:  {v: 20,  from: "examples/blinky_coupon.py: Board(w=20)"}
+  board_d:  {v: 15,  from: "examples/blinky_coupon.py: Board(h=15)"}
+  board_t:  {v: 1.6, tol: 0.15, from: "JLCPCB default 1.6 mm stackup"}
+
+  # --- what we choose
+  wall:      {v: 2.0, from: "5 perimeters @ 0.4 nozzle"}
+  floor_t:   {v: 1.2, from: "3 layers @ 0.4 nozzle"}
+  standoff:  {v: 2.5, from: "clears J1 through-hole tails (~2 mm)"}
+  fit_clear: {v: 0.3, tol: 0.05, from: "slip fit, FDM rule of thumb 0.2-0.3/side"}
+
+  # --- derived: the case follows from the board
+  inset:  "wall + fit_clear"
+  case_w: {expr: "board_w + 2*inset", tol: 0.2, from: "FDM process ±0.2 typical"}
+  case_d: {expr: "board_d + 2*inset", tol: 0.2, from: "FDM process ±0.2 typical"}
+  case_h: "floor_t + standoff + board_t + 2.0"
+
+  # --- features located from board coordinates
+  m2_x:       "inset + 2.5"     # b.hole(2.5, 12.5) in the board script
+  m2_y:       "inset + 12.5"
+  m2_clear_d: {v: 2.4, tol: 0.1, from: "M2 clearance, close fit"}
+  led_x:      "inset + 5"       # D1 at (5, 7.5) in the board script
+  led_y:      "inset + 7.5"
+  led_win_d:  {v: 3.2, from: "0603 LED viewing window, chosen"}
+
+fits:
+  - {name: board_in_pocket, hole: "board_w + 2*fit_clear", shaft: board_w, class: slip}
+
+checks:
+  - {expr: "floor_t >= 3*0.4", msg: "floor is at least 3 layers at a 0.4 nozzle"}
+  - {expr: "case_h >= floor_t + standoff + board_t", msg: "case is deep enough for the board stack"}
+  - {expr: "led_win_d > 1.6", msg: "LED window clears an 0603 package"}
+
+views:
+  top:
+    plane: xy
+    outline: {rect: [0, 0, case_w, case_d], r: 3}
+    features:
+      - {id: m2,   circle: [m2_x, m2_y],  d: m2_clear_d, note: "M2 clearance under the board hole"}
+      - {id: led,  circle: [led_x, led_y], d: led_win_d, note: "LED window over D1"}
+      - {id: vent, slot: [13, 4, 20, 4],   w: 2.0,       note: "vent"}
+    dims:
+      - {linear: [[0, 0], [case_w, 0]], offset: -10, tol_from: case_w}
+      - {linear: [[0, 0], [0, case_d]], offset: -10, tol_from: case_d}
+      - {diameter: m2,  angle: 60,  tol_from: m2_clear_d}
+      - {diameter: led, angle: 250}
+      - {linear: [[0, m2_y], [m2_x, m2_y]], offset: 8}    # locate M2 in x
+      - {linear: [[m2_x, 0], [m2_x, m2_y]], offset: -5}   # ...and in y
+
+asbuilt:
+  asm_case:
+    bbox: [case_w, case_d, case_h]
+    tol: 0.25
+    holes: {view: top, at: "floor_t/2"}
