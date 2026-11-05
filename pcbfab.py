@@ -77,7 +77,7 @@ def bom_cpl(board: Path, spec: dict, out_bom: Path, out_cpl: Path) -> tuple[int,
                 continue
             w.writerow([ref, f"{float(r['PosX']):.3f}", f"{float(r['PosY']):.3f}",
                         "Top" if r["Side"] == "top" else "Bottom",
-                        f"{float(r['Rot']):.1f}"])
+                        f"{float(r['Rot']) % 360:.1f}"])
             placed += 1
 
     groups: dict[tuple, list[str]] = {}

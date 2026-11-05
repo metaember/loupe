@@ -14,8 +14,8 @@ sliders, and --group so chosen parts explode as one rigid body (e.g. keep the PC
 glass + connectors together while the case shells fly off).
 
 Usage:
-  uv run viewer.py body.stl lid.stl -o preview.html --title "Pill organizer"
-  uv run viewer.py case_body.stl case_panel.stl pcb.stl glass.stl io.stl \\
+  uv run tools/viewer.py body.stl lid.stl -o preview.html --title "Device enclosure"
+  uv run tools/viewer.py case_body.stl case_panel.stl pcb.stl glass.stl io.stl \\
       --group module=pcb,glass,io -o preview.html   # module stays rigid on explode
 
 Regenerate any time; keep the HTML open in a browser and refresh.
@@ -73,7 +73,7 @@ def main() -> None:
 
     glb = trimesh.Scene(meshes).export(file_type="glb")
     b64 = base64.b64encode(glb).decode()
-    title = args.title or " + ".join(l["name"] for l in legend)
+    title = args.title or " + ".join(entry["name"] for entry in legend)
 
     html = HTML.replace("__GLB__", b64) \
                .replace("__TITLE__", title) \
@@ -122,6 +122,7 @@ HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <div id="panel">
   <button id="spin">stop rotation</button>
   <button id="explode">explode</button>
+  <button id="caps">solid cut: on</button>
   <div class="cliprow" id="clips"><b>clip planes</b></div>
 </div>
 <script type="module">
@@ -180,7 +181,8 @@ function label(text, color, mm){
   c.textAlign = 'center'; c.textBaseline = 'middle';
   c.fillText(text, 64, 68);
   const tex = new THREE.CanvasTexture(cv); tex.anisotropy = 4;
-  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map:tex, transparent:true, depthTest:false }));
+  // World-space labels are occluded by solids, without writing a rectangular depth mask.
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map:tex, transparent:true, depthTest:true, depthWrite:false }));
   s.scale.set(mm, mm, 1);
   return s;
 }
@@ -201,6 +203,7 @@ for (const e of EVEC){
 const clipState = AXES.map(() => ({ on:false, lo:0, hi:0 }));
 
 const pieces = [];
+const capQuads = [];
 let explodeAmt = 0, explodeTarget = 0;
 
 new GLTFLoader().parse(toBuf(B64), '', (gltf) => {
@@ -223,7 +226,8 @@ new GLTFLoader().parse(toBuf(B64), '', (gltf) => {
     o.add(el);
     const bb = new THREE.Box3().setFromBufferAttribute(o.geometry.attributes.position);
     o.userData = { c: bb.getCenter(new THREE.Vector3()), sz: bb.getSize(new THREE.Vector3()),
-                   base: o.position.clone(), gid: GROUPS[pieces.length] };
+                   base: o.position.clone(), gid: GROUPS[pieces.length],
+                   hex: (LEGEND[pieces.length] || {}).color || '#8fa0b0' };
     pieces.push(o);
   }});
   scene.add(model);
@@ -307,6 +311,49 @@ new GLTFLoader().parse(toBuf(B64), '', (gltf) => {
                      '#aeb6c2', step*2.6);
   dims.position.set(center.x, gy0 - step*2, z0 + 1); scene.add(dims);
 
+  // ── section caps: fill each part's clip-cut face with a solid stencil section, so a
+  // clipped view reads as cut solids instead of xray-through-hollow-shells ──
+  let capsOn = true;
+  const capGroup = new THREE.Group(); scene.add(capGroup);
+  const stencilKids = [];
+  const CAP = Math.max(size.x, size.y, size.z) * 3;
+  const ZC = new THREE.Vector3(0, 0, 1);
+  function rebuildCaps(){
+    for (const m of stencilKids) if (m.parent) m.parent.remove(m);
+    stencilKids.length = 0; capQuads.length = 0;
+    while (capGroup.children.length) capGroup.remove(capGroup.children[0]);
+    if (!capsOn) return;
+    try {
+      const active = [];
+      AXES.forEach((ax, i) => { if (clipState[i].on) active.push(clipPlanes[2*i], clipPlanes[2*i+1]); });
+      let order = 60;
+      for (const plane of active){
+        const others = active.filter(p => p !== plane);
+        for (const o of pieces){
+          for (const [sideVal, op] of [[THREE.BackSide, THREE.IncrementWrapStencilOp],
+                                       [THREE.FrontSide, THREE.DecrementWrapStencilOp]]){
+            const sm = new THREE.MeshBasicMaterial({ depthWrite:false, depthTest:false, colorWrite:false,
+              stencilWrite:true, stencilFunc:THREE.AlwaysStencilFunc, clippingPlanes:[plane], side:sideVal });
+            sm.stencilFail = sm.stencilZFail = sm.stencilZPass = op;
+            const km = new THREE.Mesh(o.geometry, sm); km.renderOrder = order; o.add(km); stencilKids.push(km);
+          }
+          const cm = new THREE.MeshStandardMaterial({ color:o.userData.hex, metalness:0, roughness:0.6,
+            side:THREE.DoubleSide, clippingPlanes:others, stencilWrite:true, stencilRef:0,
+            stencilFunc:THREE.NotEqualStencilFunc, stencilFail:THREE.ReplaceStencilOp,
+            stencilZFail:THREE.ReplaceStencilOp, stencilZPass:THREE.ReplaceStencilOp });
+          const quad = new THREE.Mesh(new THREE.PlaneGeometry(CAP, CAP), cm);
+          quad.renderOrder = order + 0.3;
+          quad.onAfterRender = (r) => r.clearStencil();
+          quad.quaternion.setFromUnitVectors(ZC, plane.normal);
+          capGroup.add(quad); capQuads.push({ quad, plane });
+          order += 1;
+        }
+      }
+    } catch (e) { console.warn('caps failed', e); }
+  }
+  const capsBtn = document.getElementById('caps');
+  capsBtn.onclick = () => { capsOn = !capsOn; capsBtn.textContent = 'solid cut: ' + (capsOn ? 'on' : 'off'); rebuildCaps(); };
+
   // clip UI: double-ended slider per axis (keep the slab between the handles)
   const cp = document.getElementById('clips');
   AXES.forEach((ax, i) => {
@@ -328,7 +375,7 @@ new GLTFLoader().parse(toBuf(B64), '', (gltf) => {
         st.on ? `${st.lo.toFixed(1)} … ${st.hi.toFixed(1)} mm` : '';
     };
     const loEl = document.getElementById('lo'+ax), hiEl = document.getElementById('hi'+ax);
-    document.getElementById('c'+ax).onchange = e => { clipState[i].on = e.target.checked; apply(); };
+    document.getElementById('c'+ax).onchange = e => { clipState[i].on = e.target.checked; apply(); rebuildCaps(); };
     loEl.oninput = e => { clipState[i].lo = Math.min(+e.target.value, clipState[i].hi);
                           e.target.value = clipState[i].lo; apply(); };
     hiEl.oninput = e => { clipState[i].hi = Math.max(+e.target.value, clipState[i].lo);
@@ -360,6 +407,7 @@ addEventListener('resize', () => {
                    f.base.y + f.off.y*explodeAmt,
                    f.base.z + f.off.z*explodeAmt);
   }
+  for (const c of capQuads) c.quad.position.copy(c.plane.normal).multiplyScalar(-c.plane.constant);
   controls.update(); renderer.render(scene, camera);
 })();
 

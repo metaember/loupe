@@ -30,6 +30,24 @@ A loupe is the glass a jeweler holds to a gem, a printer to a proof sheet — th
 
 ---
 
+## Electronics project workflow
+
+The shared tools also support a versioned local `loupe.json` project workflow:
+
+```sh
+uv run loupe.py --project /path/to/device doctor
+uv run loupe.py --project /path/to/device build
+uv run loupe.py --project /path/to/device check
+uv run loupe.py --project /path/to/device review
+uv run loupe.py --project /path/to/device release --target jlcpcb
+```
+
+Passing evidence is bound to input/output hashes and tool versions. Release rejects
+stale or missing evidence and produces local review bundles with checksums.
+Ordinary project builds preserve the reviewed native PCB and schematic.
+See [the workflow contract, limits and tests](docs/workflow.md).
+
+
 ## Why this exists
 
 The reliable way to do CAD with code in 2026 isn't GUI-automation-over-a-protocol, and it isn't text-to-CAD. It's three things working together:
@@ -107,13 +125,18 @@ uv run check.py part.stl --min-wall 1.2 --overhang 45 --json      # thin-wall + 
 
 - **Interference** = exact manifold boolean volume between every pair of parts, always reported.
 - **Clearance** samples part A's surface and measures signed distance to part B (negative = penetration). Scope it with `@z=lo:hi` — parts that legitimately touch elsewhere (a flange resting on a rim) otherwise read 0.
-- **Watertightness** is always checked. `--min-wall` is an inward ray-cast; `--overhang DEG` reports unsupported area (the bed face is excluded).
+- **Watertightness** is always checked. Wall preflight defaults to a 0.4 mm floor;
+  `--min-wall` changes it, and `--no-wall-check` explicitly opts out for reference geometry.
+  The checker samples opposing surfaces, reports sustained thin patches, and fails when
+  the wall backend is indeterminate. Sharp-edge diagnostics and sampling limits remain
+  visible; this does not certify physical printability. `--overhang DEG` reports
+  unsupported area (the bed face is excluded).
 
 ### `sheet.py` — labeled contact sheet (the reviewer's eyes)
 
 Renders one or more meshes into a single PNG: 8 named orthographic/iso views + custom camera angles, 2D cross-section slices with **automatic part-vs-part interference detection** (overlap painted red, mm² in the caption), 3D cutaways, and region zoom. Every tile is captioned with its camera position and screen axes — trust the captions, not your assumptions.
 
-![The default contact sheet of a cutlery-drawer insert: two isometric views plus front, back, left, right, top and bottom. The per-utensil channels read from the top, the ramped floor from the side, and the comb of channel walls head-on — each tile captioned with camera position and screen axes.](docs/img/contact-sheet.png)
+![A contact sheet of a multi-compartment insert: two isometric views plus front, back, left, right, top and bottom. The per-utensil channels read from the top, the ramped floor from the side, and the comb of channel walls head-on — each tile captioned with camera position and screen axes.](docs/img/contact-sheet.png)
 
 ```sh
 uv run sheet.py body.stl lid.stl -o sheet.png
@@ -134,7 +157,7 @@ uv run sheet.py a.stl --views none --slice z=10,20,30                    # slice
 
 One HTML file (GLB embedded as base64, three.js from CDN): orbit controls, an adaptive mm grid with tick numbers in **world mm on all three axes**, per-part legend, explode toggle, auto-rotate (remembered in localStorage), and **double-ended clip sliders per axis** (keep the slab between two handles).
 
-![The self-contained browser viewer showing a VFD-clock enclosure on a world-mm grid with colored X/Y/Z axes, a per-part legend, and explode and per-axis clip-plane controls.](docs/img/viewer.png)
+![The self-contained browser viewer showing a device enclosure on a world-mm grid with colored X/Y/Z axes, a per-part legend, and explode and per-axis clip-plane controls.](docs/img/viewer.png)
 
 ```sh
 uv run viewer.py body.stl lid.stl -o preview.html --title "My part"
@@ -162,7 +185,7 @@ Defaults: P1S, 0.4 nozzle, 0.20 mm Standard, Bambu PLA Basic. Filament weight is
 
 ## The PCB pipeline
 
-The same philosophy pointed at circuit boards: the board is a program, verification is deterministic (KiCad's real DRC, headless), and review happens on a rendered contact sheet. **The board script IS the netlist** — no schematic, no GUI; declare parts, connect pads, place and route with computed coordinates.
+The same philosophy pointed at circuit boards: the board is a program, verification is deterministic (KiCad's real DRC, headless), and review happens on a rendered contact sheet. **The board script defines the PCB netlist**; native schematic generation/checks are available through the project workflow; declare parts, connect pads, place and route with computed coordinates.
 
 ![A PCB contact sheet: raytraced 3D renders of a small green board from top, bottom and isometric angles, above three white layer plots showing front copper with routed tracks, the back copper ground pour, and the silkscreen.](docs/img/pcb-sheet.png)
 

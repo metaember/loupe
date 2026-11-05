@@ -149,3 +149,11 @@ claude mcp add loupe -- uv run /ABS/PATH/TO/loupe/loupe_mcp.py
 
 Then call `loupe.sheet(files=[...], slices=["z=50%"])` and read the returned image directly. Paths are
 resolved relative to the directory the server was launched in (usually your project root).
+
+
+## Electronics project workflow
+
+Read `docs/workflow.md` for loupe.json stages, native source ownership, freshness,
+release limits and regression commands. Use `loupe.py doctor/build/check/review/release`
+for configured projects. Ordinary builds preserve reviewed native routing. Never
+replace source boards as an implicit prerequisite of checking or releasing.
