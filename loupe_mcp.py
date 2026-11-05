@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["mcp>=1.2"]
+# dependencies = ["mcp>=1.2,<2"]
 # ///
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Charles Bine
@@ -26,6 +26,10 @@ from __future__ import annotations
 import subprocess
 import tempfile
 from pathlib import Path
+from contextlib import redirect_stdout
+from io import StringIO
+import json
+from typing import Literal
 
 from mcp.server.fastmcp import FastMCP, Image
 
@@ -164,6 +168,31 @@ def slice_(
         args += ["--filament", filament]
     r = _run("slice.py", args)
     return (r.stdout + r.stderr).strip() or "(no output)"
+
+
+@mcp.tool()
+def project_status(project: str) -> str:
+    """Return fresh/stale content-bound evidence for a local loupe.json project."""
+    from workflow import Project
+    return json.dumps(Project(project).status())
+
+
+@mcp.tool()
+def project_run(project: str, action: Literal["build", "check", "review", "release"]) -> str:
+    """Run the local project workflow. Release only creates local review ZIPs.
+
+    No upload, order, printing or device flashing. Failed checks propagate errors.
+    """
+    from workflow import Project
+    log = StringIO()
+    with redirect_stdout(log):
+        p = Project(project)
+        if action == "release":
+            report = p.release()
+        else:
+            p.run(action)
+            report = p.status()
+    return json.dumps({"result": report, "log": log.getvalue()})
 
 
 if __name__ == "__main__":
